@@ -21,10 +21,8 @@ def runList(keys, usr=None):
 	out = shout('squeue %s' % uStr)
 	jobList = np.array( [ x.split() for x in out.split('\n')[1:-1] ])
 	jID = jobList[:,0].astype(np.int)
-	WorkDir = []; JobName = [];
 	for job in jID:
 		out = shout('scontrol show job %d' % job)
-		res2 = out
 		res = dict(re.findall(r'(\w*)=([\w*{\.,\/\-}]+\w*)?-*', out))
 		for key in keys:
 			kDict[key].append( res[key] )
@@ -45,39 +43,76 @@ def fexists(rDict, fname):
 #---------------------------------------------------------------------------------------#
 # Extract user specific entries for given keyword
 #---------------------------------------------------------------------------------------#
-def exUser(rDict, key, usr, partition=None):
+def exUser(rDict, key, usr, partition=None, jstate=None):
 	# User list from global dictionary
 	USR = np.array( rDict['UserId'] )
 	ind = (USR==usr)
 	# Add filter by partition name
 	if partition != None:
 		PART = np.array( rDict['Partition'] )
-		ind = (ind) & (PART==partition)
+		ind = (ind) & np.in1d(PART, partition)
+	if jstate != None:
+		JobState = np.array( rDict['JobState'] )
+		ind = (ind) & (JobState==jstate)
 	return np.array( rDict[key] ) [ind]
+#---------------------------------------------------------------------------------------#
+# Extract cluster limits
+#---------------------------------------------------------------------------------------#
+def limCluster(partition=None):
+	keys = ['NodeName', 'CPUAlloc', 'CPUTot', 'Partitions']
+	kDict = { k:[] for k in keys }
+	out = shout('sinfo --Node --long')
+	nID = np.array( [ x.split()[0] for x in out.split('\n')[2:-1] ])
+	# Node ID
+	for node in nID:
+		out = shout('scontrol show node %s' % node)
+		res = dict(re.findall(r'(\w*)=([\w*{\.,\/\-}]+\w*)?-*', out))
+		for key in keys:
+			kDict[key].append( res[key] )
+	# Add filter by partition name
+	if partition != None:
+		PART = np.array( kDict['Partitions'] )
+		ind = np.in1d(PART, partition)
+	alloc = np.array( kDict['CPUAlloc'] ).astype(int) [ind]
+	total = np.array( kDict['CPUTot'] ).astype(int) [ind]
+	return np.array( kDict['NodeName'] ) [ind], alloc, total, 100.0*(total-alloc)/total
 #---------------------------------------------------------------------------------------#
 # Main
 #---------------------------------------------------------------------------------------#
 if __name__ == "__main__":
-	partition = 'fe13'
+	sep = '#'+'-'*50+'#'
+	# Set these parameters to None (not string) to include all possible data
+	partition = ['fe13', 'plato']
+#---------------------------------------------------------------------------------------#
+# Cluster capacity
+#---------------------------------------------------------------------------------------#
+	nodeData = limCluster(partition=partition)
+	nodeList, alloc, total, perc = nodeData 
+	print('%s\nNode\t\tnAllocated\t\tnFree\t\t%%Free\n%s' % (sep, sep) )
+	print("\n".join( [ "\t\t".join(map(str,y)) for y in np.array(nodeData).T ] ) )
+	cperc = 100.0*sum(total-alloc)/sum(total)
+	print("Total free %% = %f" % cperc )
+#---------------------------------------------------------------------------------------#
+	# Job state: None OR 'RUNNING' or 'PENDING'
+	jstate = None
 	# Keywords in scontrol output
-	queries = ['UserId', 'JobName', 'WorkDir', 'NumNodes', 'NumCPUs', 'Partition']
+	queries = ['UserId', 'JobName', 'WorkDir', 'NumNodes', 'NumCPUs', 'Partition', 'JobState']
 	rDict = runList(queries)#,  usr='as3833')
 	USR, ucount = np.unique( np.array( rDict['UserId'] ) , return_counts=True)
 #---------------------------------------------------------------------------------------#
 	NumCPUs = []; NumNodes = [];
 	# Loop over the unique set of users running jobs
-	print('USER\t\tnJob\t\tnCPU\t\tnNode\n#%s#' % ('-'*50) )
+	print('%s\nUSER\t\tnJob\t\tnCPU\t\tnNode\n%s' % (sep, sep) )
 	for ui, usr in enumerate(USR):
 		# Corresponding index list
 		# Extend based on keywords
-		NumCPUs.append( exUser(rDict, 'NumCPUs', usr, partition=partition).astype(np.int).sum() )
+		NumCPUs.append( exUser(rDict, 'NumCPUs', usr, partition=partition, jstate=jstate).astype(np.int).sum() )
 		# Change to include hyphenations in the node lists
-		_nn = sum([ int(x.split('-')[0]) for x in exUser(rDict, 'NumNodes', usr, partition=partition) ])
+		_nn = sum([ int(x.split('-')[0]) for x in exUser(rDict, 'NumNodes', usr, partition=partition, jstate=jstate) ])
 		NumNodes.append( _nn )
-		outList = [ usr, ucount[ui], NumCPUs[-1], NumNodes[-1] ]
-		print( '\t\t'.join(map(str,outList)) )
+		print( '%s\t\t%s\t\t%s (%0.3g%%)\t\t%s' % (usr, ucount[ui], NumCPUs[-1], 100.0*NumCPUs[-1]/sum(total), NumNodes[-1]) )
 #---------------------------------------------------------------------------------------#
-	# Plot
+	# Plot USER data
 	fig, ax = plt.subplots()
 	lcpu = ax.plot(range(len(USR)), NumCPUs, 'r-s', label='NumCPUs')
 	axn = ax.twinx()
@@ -92,4 +127,18 @@ if __name__ == "__main__":
 	lns = lcpu+lnode
 	labs = [l.get_label() for l in lns]
 	ax.legend(lns, labs, loc='best', frameon=False)
+#---------------------------------------------------------------------------------------#
+	# Plot cluster capacity
+	figc, axc = plt.subplots()
+	width = 0.75	
+	lalloc = axc.bar(range(len(nodeList)), alloc, width, color='blue', label='Allocated')
+	lfree = axc.bar(range(len(nodeList)), (total-alloc), width, color='orange', label='Free', bottom=alloc)
+#---------------------------------------------------------------------------------------#
+	axc.set_xlabel(r'Nodes')
+	axc.set_ylabel(r'State')
+	axc.set_xlim([-0.5,len(nodeList)+0.5])
+	axc.set_xticks(np.arange(len(nodeList)))
+	axc.set_xticklabels(nodeList, rotation=45)
+	axc.legend(loc='best', frameon=False)
+#---------------------------------------------------------------------------------------#
 	plt.show()
