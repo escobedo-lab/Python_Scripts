@@ -1,4 +1,4 @@
-import os,itertools,sys,subprocess,shlex,re
+import os,subprocess,shlex,re
 import numpy as np
 import matplotlib.pyplot as plt
 #---------------------------------------------------------------------------------------#
@@ -75,14 +75,14 @@ def limCluster(partition=None):
 		ind = np.in1d(PART, partition)
 	alloc = np.array( kDict['CPUAlloc'] ).astype(int) [ind]
 	total = np.array( kDict['CPUTot'] ).astype(int) [ind]
-	return np.array( kDict['NodeName'] ) [ind], alloc, total, 100.0*(total-alloc)/total
+	return np.array( kDict['NodeName'] ) [ind], alloc, total, total-alloc
 #---------------------------------------------------------------------------------------#
 # Main
 #---------------------------------------------------------------------------------------#
 if __name__ == "__main__":
 	sep = '#'+'-'*50+'#'
 	# Set these parameters to None (not string) to include all possible data
-	partition = ['fe13', 'plato']
+	partition = ['fe13', 'plato', 'common']
 #---------------------------------------------------------------------------------------#
 # Cluster capacity
 #---------------------------------------------------------------------------------------#
@@ -94,13 +94,14 @@ if __name__ == "__main__":
 	print("Total free %% = %f" % cperc )
 #---------------------------------------------------------------------------------------#
 	# Job state: None OR 'RUNNING' or 'PENDING'
-	jstate = None
+	jstate = 'RUNNING'
+	statep = 'PENDING'
 	# Keywords in scontrol output
 	queries = ['UserId', 'JobName', 'WorkDir', 'NumNodes', 'NumCPUs', 'Partition', 'JobState']
-	rDict = runList(queries)#,  usr='as3833')
+	rDict = runList(queries)
 	USR, ucount = np.unique( np.array( rDict['UserId'] ) , return_counts=True)
 #---------------------------------------------------------------------------------------#
-	NumCPUs = []; NumNodes = [];
+	NumCPUs = []; NumNodes = []; NumCPUs2 = []; NumNodes2 = []
 	# Loop over the unique set of users running jobs
 	print('%s\nUSER\t\tnJob\t\tnCPU\t\tnNode\n%s' % (sep, sep) )
 	for ui, usr in enumerate(USR):
@@ -111,6 +112,10 @@ if __name__ == "__main__":
 		_nn = sum([ int(x.split('-')[0]) for x in exUser(rDict, 'NumNodes', usr, partition=partition, jstate=jstate) ])
 		NumNodes.append( _nn )
 		print( '%s\t\t%s\t\t%s (%0.3g%%)\t\t%s' % (usr, ucount[ui], NumCPUs[-1], 100.0*NumCPUs[-1]/sum(total), NumNodes[-1]) )
+		NumCPUs2.append( exUser(rDict, 'NumCPUs', usr, partition=partition, jstate=statep).astype(np.int).sum() )
+		# Change to include hyphenations in the node lists
+		_nn = sum([ int(x.split('-')[0]) for x in exUser(rDict, 'NumNodes', usr, partition=partition, jstate=statep) ])
+		NumNodes2.append( _nn )
 #---------------------------------------------------------------------------------------#
 	# Plot USER data
 	fig, ax = plt.subplots()
@@ -127,6 +132,17 @@ if __name__ == "__main__":
 	lns = lcpu+lnode
 	labs = [l.get_label() for l in lns]
 	ax.legend(lns, labs, loc='best', frameon=False)
+
+	#---------------------------------------------------------------------------------------#
+	# Plot USER data PENDING
+	fig2, ax2 = plt.subplots()
+	lcpu2 = ax2.plot(range(len(USR)), NumCPUs2, 'r-s', label='NumCPUs')
+#---------------------------------------------------------------------------------------#
+	ax2.set_xlabel(r'Users')
+	ax2.set_ylabel(r'Pending Resources')
+	ax2.set_xlim([-0.5,len(USR)-0.5])
+	ax2.set_xticks(np.arange(len(USR)))
+	ax2.set_xticklabels(USR, rotation=45)
 #---------------------------------------------------------------------------------------#
 	# Plot cluster capacity
 	figc, axc = plt.subplots()
